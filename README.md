@@ -1,68 +1,118 @@
 # YouTube Video Downloader Telegram Bot
 
-This is a Telegram bot that allows users to download YouTube videos by sending a link. Users can select the video quality before downloading. If the video is too large, it is uploaded to a private Telegram group and forwarded to the user.
+This bot allows users to download YouTube videos in various qualities and receive them directly on Telegram. If the file is too large, it is uploaded to a private group and forwarded to the user.
 
 ## Features
-- Download YouTube videos in various qualities.
-- Upload large videos to a private Telegram group.
-- Forward uploaded videos to users.
-- Asynchronous processing for better performance.
+
+- Fetch available video formats.
+- Download videos in the selected quality.
+- Upload large files to a private group and forward them.
+- Works asynchronously to handle multiple users without blocking.
 
 ## Installation
 
-### 1. Clone the repository
+### 1. Clone the Repository
+
 ```sh
 git clone https://github.com/Xurshid97/yt.git
 cd yt
 ```
 
-### 2. Create and activate a virtual environment
+### 2. Set Up a Virtual Environment
 
-#### On Windows:
 ```sh
 python -m venv venv
-venv\Scripts\activate
+source venv/bin/activate  # On macOS/Linux
+venv\Scripts\activate    # On Windows
 ```
 
-#### On macOS/Linux:
-```sh
-python3 -m venv venv
-source venv/bin/activate
-```
+### 3. Install Dependencies
 
-### 3. Install dependencies
 ```sh
 pip install -r requirements.txt
 ```
 
-## Configuration
+### 4. Set Up Environment Variables
 
-### 1. Create a `.env` file in the project directory and add the following variables:
-```
-TOKEN=your-telegram-bot-token
-API_ID=your-telegram-api-id
-API_HASH=your-telegram-api-hash
-PHONE_NUMBER=your-telegram-phone-number
-PRIVATE_GROUP_ID=your-private-group-id
+Create a `.env` file in the root directory and add your credentials:
+
+```ini
+TOKEN=<your-telegram-bot-token>
+API_ID=<your-telegram-api-id>
+API_HASH=<your-telegram-api-hash>
+PHONE_NUMBER=<your-telegram-phone-number>
+PRIVATE_GROUP_ID=<your-private-group-id>
 ```
 
-### 2. Run the bot
+## Running the Bot
+
 ```sh
 python bot.py
 ```
 
-## Usage
-1. Start the bot by sending `/start`.
-2. Send a YouTube link.
-3. Select the desired video quality.
-4. Wait for the bot to process and send the video.
+## Running the Bot Non-Stop on a Server
 
-## Dependencies
-- `python-telegram-bot`
-- `telethon`
-- `yt-dlp`
-- `python-dotenv`
+To keep the bot running continuously on a server, use `systemd` for better reliability.
+
+### Using `systemd` (Recommended)
+
+1. Create a systemd service file:
+
+```sh
+sudo nano /etc/systemd/system/youtube_bot.service
+```
+
+2. Add the following content (update the paths accordingly):
+
+```ini
+[Unit]
+Description=YouTube Video Downloader Telegram Bot
+After=network.target
+
+[Service]
+ExecStart=/path/to/venv/bin/python /path/to/repository/bot.py
+WorkingDirectory=/path/to/repository
+Environment="TOKEN=<your-telegram-bot-token>"
+Environment="API_ID=<your-telegram-api-id>"
+Environment="API_HASH=<your-telegram-api-hash>"
+Environment="PHONE_NUMBER=<your-telegram-phone-number>"
+Environment="PRIVATE_GROUP_ID=<your-private-group-id>"
+Restart=always
+User=<your-server-username>
+
+[Install]
+WantedBy=multi-user.target
+```
+
+3. Reload systemd and enable the service:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable youtube_bot
+sudo systemctl start youtube_bot
+```
+
+4. Check bot status:
+
+```sh
+sudo systemctl status youtube_bot
+```
+
+5. To view logs:
+
+```sh
+journalctl -u youtube_bot -f
+```
+
+## Logging
+
+The bot uses Python’s built-in `logging` module. Logs can be found in the console output or redirected to a file if needed.
+
+## Contributing
+
+Feel free to submit issues and pull requests to improve the bot!
 
 ## License
-This project is licensed under the MIT License.
+
+MIT License
 
