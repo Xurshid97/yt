@@ -37,7 +37,7 @@ pip install -r requirements.txt
 Create a `.env` file in the root directory and add your credentials:
 
 ```ini
-TOKEN=<your-telegram-bot-token>
+BOT_TOKENS=<your-telegram-bot-token>
 API_ID=<your-telegram-api-id>
 API_HASH=<your-telegram-api-hash>
 PHONE_NUMBER=<your-telegram-phone-number>
@@ -72,7 +72,7 @@ After=network.target
 [Service]
 ExecStart=/path/to/venv/bin/python /path/to/repository/bot.py
 WorkingDirectory=/path/to/repository
-Environment="TOKEN=<your-telegram-bot-token>"
+Environment="BOT_TOKENS=<your-telegram-bot-token>"
 Environment="API_ID=<your-telegram-api-id>"
 Environment="API_HASH=<your-telegram-api-hash>"
 Environment="PHONE_NUMBER=<your-telegram-phone-number>"

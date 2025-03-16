@@ -1,8 +1,8 @@
-
 import os
 import yt_dlp
 import logging
 import asyncio
+import multiprocessing
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
 from telethon.sync import TelegramClient
@@ -13,8 +13,8 @@ logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
-# Retrieve credentials from environment variables
-TOKEN = os.getenv("TOKEN")
+# Store multiple bot tokens (Comma-separated in .env)
+BOT_TOKENS = os.getenv("BOT_TOKENS").split(",")  # Example: "TOKEN1,TOKEN2,TOKEN3"
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER")
@@ -23,16 +23,15 @@ PRIVATE_GROUP_ID = int(os.getenv("PRIVATE_GROUP_ID"))
 # Initialize Telegram Client (Uploader)
 uploader_client = TelegramClient("uploader", API_ID, API_HASH)
 
-# Dictionary to track user requests (user_id → YouTube URL)
+# Dictionary to track user requests (user_id → Video URL)
 user_requests = {}
 
 def get_available_formats(url):
-    """Fetch available video formats for the given YouTube URL."""
+    """Fetch available video formats."""
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
         'geo_bypass': True,
-        'extractor_args': {'youtube': {'player_client': ['android']}},
         'http_headers': {'User-Agent': 'Mozilla/5.0'},
     }
     try:
@@ -45,13 +44,10 @@ def get_available_formats(url):
         logging.error(f"Error fetching formats: {e}")
         return {}
 
-async def download_youtube_video(url, quality):
-    """Download YouTube video in the selected quality asynchronously."""
-    available_formats = get_available_formats(url)
-    format_id = available_formats.get(quality) or max(available_formats.keys(), key=int)
-
+async def download_video(url):
+    """Download video with best audio merged."""
     ydl_opts = {
-        'format': format_id,
+        'format': 'bv*+ba/b',  # Best video + best audio
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'merge_output_format': 'mp4',
         'noplaylist': True,
@@ -69,13 +65,13 @@ def get_file_size(file_path):
     return os.path.getsize(file_path) / (1024 * 1024)
 
 async def start(update: Update, context: CallbackContext):
-    await update.message.reply_text("Send me a YouTube link and choose a quality.")
+    await update.message.reply_text("Send me a video link from YouTube, Instagram, or other social media platforms.")
 
 async def handle_message(update: Update, context: CallbackContext):
     url = update.message.text.strip()
     user_id = update.message.from_user.id
 
-    if "youtube.com" in url or "youtu.be" in url:
+    if any(site in url for site in ["youtube.com", "youtu.be", "instagram.com", "tiktok.com", "facebook.com", "twitter.com"]):
         user_requests[user_id] = url
         available_formats = get_available_formats(url)
 
@@ -88,7 +84,7 @@ async def handle_message(update: Update, context: CallbackContext):
 
         await update.message.reply_text("Choose available video quality:", reply_markup=reply_markup)
     else:
-        await update.message.reply_text("Please send a valid YouTube link.")
+        await update.message.reply_text("Please send a valid video link.")
 
 async def handle_quality_selection(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -99,27 +95,30 @@ async def handle_quality_selection(update: Update, context: CallbackContext):
     url = user_requests.get(user_id)
 
     if not url:
-        await query.message.reply_text("Error: No URL found. Please send the YouTube link again.")
+        await query.message.reply_text("Error: No URL found. Please send the video link again.")
         return
 
     await query.edit_message_text(f"Downloading video in {quality}p... Please wait.")
 
     # Run the download and upload in the background
-    asyncio.create_task(process_video_download_and_upload(url, quality, user_id, context))
+    asyncio.create_task(process_video_download_and_upload(url, user_id, context))
 
-async def process_video_download_and_upload(url, quality, user_id, context):
+async def process_video_download_and_upload(url, user_id, context):
     """Handles downloading and uploading the video in parallel."""
     try:
-        video_path = await download_youtube_video(url, quality)
+        video_path = await download_video(url)
         file_size = get_file_size(video_path)
 
         if file_size <= 50:
             await context.bot.send_video(chat_id=user_id, video=open(video_path, "rb"))
         else:
             await context.bot.send_message(chat_id=user_id, text=f"Video is {file_size:.2f}MB. Uploading via bot...")
+            await upload_and_forward_video(video_path, user_id, context)
 
-            # Run the upload in the background
-            asyncio.create_task(upload_and_forward_video(video_path, user_id, context))
+        # ✅ Delete file after sending/uploading
+        if os.path.exists(video_path):
+            os.remove(video_path)
+            logging.info(f"Deleted video file: {video_path}")
 
     except Exception as e:
         logging.error(f"Error processing video: {e}")
@@ -149,15 +148,29 @@ async def upload_and_forward_video(video_path, user_id, context):
         logging.error(f"Error uploading video: {e}")
         await context.bot.send_message(chat_id=user_id, text="An error occurred while uploading your video.")
 
-def main():
-    app = Application.builder().token(TOKEN).read_timeout(600).write_timeout(600).build()
+def start_bot(token):
+    """Initialize and run a bot instance."""
+    app = Application.builder().token(token).read_timeout(600).write_timeout(600).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_quality_selection))
 
-    uploader_client.start(PHONE_NUMBER)
+    logging.info(f"Starting bot with token: {token[:6]}...")  # Only show first 6 characters for privacy
     app.run_polling()
+
+def main():
+    processes = []
+
+    for token in BOT_TOKENS:
+        p = multiprocessing.Process(target=start_bot, args=(token,))
+        p.start()
+        processes.append(p)
+
+    # Keep processes running
+    for p in processes:
+        p.join()
 
 if __name__ == "__main__":
     main()
 
+# make sure every user (username) who is using bot should be sent to private group
