@@ -3,6 +3,7 @@ import yt_dlp
 import logging
 import asyncio
 import multiprocessing
+import subprocess
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
 from telethon.sync import TelegramClient
@@ -14,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
 # Store multiple bot tokens (Comma-separated in .env)
-BOT_TOKENS = os.getenv("BOT_TOKENS").split(",")  # Example: "TOKEN1,TOKEN2,TOKEN3"
+BOT_TOKENS = os.getenv("BOT_TOKENS").split(",")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER")
@@ -26,13 +27,39 @@ uploader_client = TelegramClient("uploader", API_ID, API_HASH)
 # Dictionary to track user requests (user_id → Video URL)
 user_requests = {}
 
+# Path to Firefox profile and cookies file
+FIREFOX_PROFILE = os.path.expanduser("~/snap/firefox/common/.mozilla/firefox/cp4r6cfh.default")
+COOKIES_FILE = "cookies.txt"
+
+def ensure_cookies():
+    """Fallback: Generate cookies.txt from Firefox profile if needed."""
+    if not os.path.exists(COOKIES_FILE):
+        result = subprocess.run([
+            "sqlite3", f"{FIREFOX_PROFILE}/cookies.sqlite",
+            "SELECT host, name, value FROM moz_cookies WHERE host LIKE '%youtube%';"
+        ], capture_output=True, text=True)
+        with open("youtube_cookies.txt", "w") as f:
+            f.write(result.stdout)
+        with open("youtube_cookies.txt", "r") as f, open(COOKIES_FILE, "w") as out:
+            out.write("# Netscape HTTP Cookie File\n")
+            out.write(f"# Generated on {subprocess.getoutput('date')}\n")
+            for line in f:
+                if line.strip():
+                    host, name, value = line.strip().split("|")
+                    out.write(f"{host}\tTRUE\t/\tTRUE\t0\t{name}\t{value}\n")
+        os.remove("youtube_cookies.txt")
+        logging.info("Generated cookies.txt from Firefox profile.")
+    return os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 50
+
 def get_available_formats(url):
-    """Fetch available video formats."""
+    """Fetch available video formats with cookies."""
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
         'geo_bypass': True,
         'http_headers': {'User-Agent': 'Mozilla/5.0'},
+        'cookiesfrombrowser': ('firefox', FIREFOX_PROFILE),  # Use cookies directly from Firefox profile
+        # 'cookiefile': COOKIES_FILE,  # Fallback: Uncomment if --cookies-from-browser fails
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -45,12 +72,14 @@ def get_available_formats(url):
         return {}
 
 async def download_video(url):
-    """Download video with best audio merged."""
+    """Download video with best audio merged using cookies."""
     ydl_opts = {
-        'format': 'bv*+ba/b',  # Best video + best audio
+        'format': 'bv*+ba/b',
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'merge_output_format': 'mp4',
         'noplaylist': True,
+        'cookiesfrombrowser': ('firefox', FIREFOX_PROFILE),  # Use cookies directly from Firefox profile
+        # 'cookiefile': COOKIES_FILE,  # Fallback: Uncomment if --cookies-from-browser fails
     }
 
     loop = asyncio.get_event_loop()
@@ -76,7 +105,11 @@ async def handle_message(update: Update, context: CallbackContext):
         available_formats = get_available_formats(url)
 
         if not available_formats:
-            await update.message.reply_text("No video formats available. Try another link.")
+            has_cookies = ensure_cookies()
+            if "youtube" in url and not has_cookies:
+                await update.message.reply_text("No video formats available. YouTube login cookies may be missing or expired.")
+            else:
+                await update.message.reply_text("No video formats available. Try another link.")
             return
 
         keyboard = [[InlineKeyboardButton(f"{q}p", callback_data=q)] for q in sorted(available_formats.keys(), key=int)]
@@ -99,8 +132,6 @@ async def handle_quality_selection(update: Update, context: CallbackContext):
         return
 
     await query.edit_message_text(f"Downloading video in {quality}p... Please wait.")
-
-    # Run the download and upload in the background
     asyncio.create_task(process_video_download_and_upload(url, user_id, context))
 
 async def process_video_download_and_upload(url, user_id, context):
@@ -115,7 +146,6 @@ async def process_video_download_and_upload(url, user_id, context):
             await context.bot.send_message(chat_id=user_id, text=f"Video is {file_size:.2f}MB. Uploading via bot...")
             await upload_and_forward_video(video_path, user_id, context)
 
-        # ✅ Delete file after sending/uploading
         if os.path.exists(video_path):
             os.remove(video_path)
             logging.info(f"Deleted video file: {video_path}")
@@ -155,22 +185,21 @@ def start_bot(token):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_quality_selection))
 
-    logging.info(f"Starting bot with token: {token[:6]}...")  # Only show first 6 characters for privacy
+    logging.info(f"Starting bot with token: {token[:6]}...")
     app.run_polling()
 
 def main():
-    processes = []
+    os.makedirs("downloads", exist_ok=True)
+    # ensure_cookies()  # Uncomment if using --cookiefile fallback
 
+    processes = []
     for token in BOT_TOKENS:
         p = multiprocessing.Process(target=start_bot, args=(token,))
         p.start()
         processes.append(p)
 
-    # Keep processes running
     for p in processes:
         p.join()
 
 if __name__ == "__main__":
     main()
-
-# make sure every user (username) who is using bot should be sent to private group
