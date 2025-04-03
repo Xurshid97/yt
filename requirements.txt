@@ -1,4 +1,6 @@
+yt-dlp
+telegram
 python-telegram-bot
 telethon
-yt-dlp
 python-dotenv
+playwright
