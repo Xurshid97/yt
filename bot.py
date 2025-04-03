@@ -21,8 +21,6 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER")
 PRIVATE_GROUP_ID = int(os.getenv("PRIVATE_GROUP_ID"))
-GOOGLE_EMAIL = os.getenv("GOOGLE_EMAIL")  # Renamed for clarity
-GOOGLE_PASSWORD = os.getenv("GOOGLE_PASSWORD")
 
 # Initialize Telegram Client (Uploader)
 uploader_client = TelegramClient("uploader", API_ID, API_HASH)
@@ -30,68 +28,32 @@ uploader_client = TelegramClient("uploader", API_ID, API_HASH)
 # Dictionary to track user requests
 user_requests = {}
 COOKIES_FILE = "/app/cookies.txt"
-CONTEXT_DIR = "/app/browser_context"  # Directory to store persistent browser state
-
-async def initialize_browser_context():
-    """Log into Google and save the browser context for reuse."""
-    try:
-        async with async_playwright() as p:
-            # Create a persistent context (saves cookies, local storage, etc.)
-            context = await p.chromium.launch_persistent_context(
-                CONTEXT_DIR,
-                headless=True,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            )
-            page = await context.new_page()
-
-            # If context is new (no cookies), log in
-            cookies = await context.cookies("https://accounts.google.com")
-            if not cookies:
-                await page.goto("https://accounts.google.com/ServiceLogin")
-                await page.fill("input[type='email']", GOOGLE_EMAIL)
-                await page.click("#identifierNext", timeout=60000)
-                await page.wait_for_timeout(2000)
-
-                # Password step with retry logic
-                for attempt in range(3):
-                    try:
-                        await page.fill("input[type='password']", GOOGLE_PASSWORD)
-                        await page.click("#passwordNext", timeout=60000)
-                        await page.wait_for_timeout(5000)
-                        break
-                    except Exception as e:
-                        logging.warning(f"Login attempt {attempt + 1} failed: {e}")
-                        if attempt == 2:
-                            raise Exception("Failed to log in after retries")
-                        await page.wait_for_timeout(2000)
-
-                # Verify login by visiting Google
-                await page.goto("https://www.google.com")
-                await page.wait_for_load_state("networkidle", timeout=60000)
-
-                # Save the context (cookies are stored in CONTEXT_DIR)
-                await context.close()
-                logging.info("Initialized browser context with Google login.")
-            else:
-                logging.info("Reusing existing browser context.")
-                await context.close()
-
-    except Exception as e:
-        logging.error(f"Error initializing browser context: {e}")
-        raise
+CONTEXT_DIR = "/app/browser_context"  # Optional: for persistent guest mode if desired
 
 async def generate_youtube_cookies():
-    """Generate YouTube cookies using the authenticated browser context."""
+    """Generate YouTube cookies in guest mode using Playwright async API."""
     try:
         async with async_playwright() as p:
-            # Reuse the persistent context
+            # Use a persistent context in guest mode (no login)
             context = await p.chromium.launch_persistent_context(
                 CONTEXT_DIR,
                 headless=True,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                args=["--guest"]  # Enable guest mode
             )
             page = await context.new_page()
             await page.goto("https://www.youtube.com", timeout=60000)
+
+            # Handle YouTube consent screen (if it appears)
+            try:
+                consent_button = page.locator("button:has-text('Accept')")  # Adjust based on language
+                if await consent_button.count() > 0:
+                    await consent_button.click(timeout=60000)
+                    await page.wait_for_load_state("networkidle", timeout=60000)
+                else:
+                    logging.info("No consent screen detected.")
+            except Exception as e:
+                logging.warning(f"Consent screen handling failed: {e}")
 
             # Wait for YouTube to load
             await page.wait_for_load_state("networkidle", timeout=60000)
@@ -107,7 +69,7 @@ async def generate_youtube_cookies():
                     f.write(f"{cookie['domain']}\tTRUE\t{cookie['path']}\t{'TRUE' if cookie['secure'] else 'FALSE'}\t"
                             f"{int(cookie['expires']) if cookie['expires'] else 0}\t{cookie['name']}\t{cookie['value']}\n")
             
-            logging.info("Generated YouTube cookies from authenticated browser context.")
+            logging.info("Generated YouTube cookies in guest mode.")
             return os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 50
 
     except Exception as e:
@@ -266,12 +228,9 @@ def main():
     # Ensure the context directory exists
     os.makedirs(CONTEXT_DIR, exist_ok=True)
 
-    # Initialize browser context with login (run once)
+    # Generate initial cookies in guest mode
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(initialize_browser_context())
-
-    # Generate initial cookies
     loop.run_until_complete(ensure_cookies())
 
     # Start the cookie refresh task
