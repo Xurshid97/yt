@@ -3,3 +3,6 @@ __pycache__/
 *.pyo
 .env
 venv/
+browser_context/
+*.log
+*.db
